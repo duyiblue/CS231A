@@ -8,8 +8,11 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import time
+import json
 
 # ----------- Gaussian Loader & Dataset -----------
 
@@ -135,7 +138,12 @@ class VectorQuantizer(nn.Module):
         loss = F.mse_loss(z_q.detach(), z) + self.commitment_cost * F.mse_loss(z_q, z.detach())
 
         z_q = z + (z_q - z).detach()
-        return z_q, loss, encoding_indices
+        
+        # Calculate embedding usage statistics
+        unique_indices, counts = torch.unique(encoding_indices, return_counts=True)
+        embedding_usage = len(unique_indices) / self.num_embeddings
+        
+        return z_q, loss, encoding_indices, embedding_usage
 
 
 class VQVAE(nn.Module):
@@ -147,11 +155,11 @@ class VQVAE(nn.Module):
 
     def forward(self, x):
         z = self.encoder(x)
-        z_q, vq_loss, encoding_indices = self.quantizer(z)
+        z_q, vq_loss, encoding_indices, embedding_usage = self.quantizer(z)
         x_recon = self.decoder(z_q)
         recon_loss = F.mse_loss(x_recon, x)
         total_loss = recon_loss + vq_loss
-        return x_recon, total_loss, vq_loss, z_q
+        return x_recon, total_loss, vq_loss, recon_loss, embedding_usage, z_q
 
 
 # ----------- Visualization -----------
@@ -165,7 +173,8 @@ def visualize_reconstruction(original, reconstructed, num_samples=5):
         plt.subplot(1, 2, 2)
         plt.title("Reconstructed Gaussian")
         plt.plot(reconstructed[i])
-        plt.show()
+        plt.savefig(f"reconstruction_{i}.png")
+        plt.close()
 
 
 # ----------- Main Training Loop -----------
@@ -201,16 +210,125 @@ def train_vqvae(
     num_epochs=30,
     lr=1e-3,
     device='cuda' if torch.cuda.is_available() else 'cpu',
-    checkpoint_dir='checkpoints',
-    latent_save_dir='latent_per_object'
+    experiment_root_dir='experiments'
 ):
+    # Create unified experiment directory with timestamp
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    experiment_dir = os.path.join(experiment_root_dir, f"experiment_{timestamp}")
+    
+    # Create subdirectories for different outputs
+    checkpoint_dir = os.path.join(experiment_dir, "checkpoints")
+    latent_save_dir = os.path.join(experiment_dir, "latents")
+    tb_log_dir = os.path.join(experiment_dir, "tensorboard_logs")
+    
+    # Create all directories
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(latent_save_dir, exist_ok=True)
-
+    os.makedirs(tb_log_dir, exist_ok=True)
+    
+    # Initialize TensorBoard writer
+    writer = SummaryWriter(tb_log_dir)
+    
     print(f"Using device: {device}")
+    print(f"Experiment directory: {experiment_dir}")
+    print(f"├── Checkpoints: {checkpoint_dir}")
+    print(f"├── Latents: {latent_save_dir}")
+    print(f"└── TensorBoard logs: {tb_log_dir}")
 
     # Compute dataset mean and std for normalization
     mean, std = compute_dataset_mean_std(ply_folder)
+    
+    # Save experiment configuration
+    config = {
+        'experiment_name': f"experiment_{timestamp}",
+        'timestamp': timestamp,
+        'ply_folder': os.path.abspath(ply_folder),
+        'model_params': {
+            'chunk_size': chunk_size,
+            'input_dim': input_dim,
+            'hidden_dim': hidden_dim,
+            'latent_dim': latent_dim,
+            'num_embeddings': num_embeddings,
+            'commitment_cost': commitment_cost
+        },
+        'training_params': {
+            'batch_size': batch_size,
+            'num_epochs': num_epochs,
+            'learning_rate': lr,
+            'device': str(device)
+        },
+        'dataset_stats': {
+            'mean': mean.tolist(),
+            'std': std.tolist()
+        }
+    }
+    
+    config_path = os.path.join(experiment_dir, 'config.json')
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    print(f"Experiment configuration saved to: {config_path}")
+    
+    # Create README for the experiment
+    readme_content = f"""# VQ-VAE Experiment: {config['experiment_name']}
+
+## Experiment Overview
+- **Timestamp**: {timestamp}
+- **Dataset**: {ply_folder}
+- **Device**: {device}
+
+## Model Architecture
+- **Input Dimension**: {input_dim} (3 means + 6 covariances)
+- **Hidden Dimension**: {hidden_dim}
+- **Latent Dimension**: {latent_dim}
+- **Codebook Size**: {num_embeddings} embeddings
+- **Commitment Cost**: {commitment_cost}
+
+## Training Configuration
+- **Chunk Size**: {chunk_size}
+- **Batch Size**: {batch_size}
+- **Number of Epochs**: {num_epochs}
+- **Learning Rate**: {lr}
+
+## Directory Structure
+```
+{experiment_dir}/
+├── config.json              # Complete experiment configuration
+├── README.md               # This file
+├── checkpoints/            # Model checkpoints per epoch
+├── latents/               # Extracted latent vectors per object
+└── tensorboard_logs/      # TensorBoard logging data
+```
+
+## Usage
+To view training progress:
+```bash
+tensorboard --logdir={tb_log_dir}
+```
+
+To load a checkpoint:
+```python
+checkpoint = torch.load('checkpoints/vqvae_epoch_<N>.pt')
+model.load_state_dict(checkpoint['model_state_dict'])
+```
+"""
+    
+    readme_path = os.path.join(experiment_dir, 'README.md')
+    with open(readme_path, 'w') as f:
+        f.write(readme_content)
+    print(f"Experiment documentation saved to: {readme_path}")
+    
+    # Log hyperparameters to TensorBoard
+    writer.add_hparams({
+        'chunk_size': chunk_size,
+        'input_dim': input_dim,
+        'hidden_dim': hidden_dim,
+        'latent_dim': latent_dim,
+        'num_embeddings': num_embeddings,
+        'commitment_cost': commitment_cost,
+        'batch_size': batch_size,
+        'learning_rate': lr,
+        'num_epochs': num_epochs
+    }, {})
 
     model = VQVAE(input_dim, hidden_dim, latent_dim, num_embeddings, commitment_cost).to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -218,9 +336,13 @@ def train_vqvae(
     ply_paths = glob.glob(os.path.join(ply_folder, '*.ply'))
 
     # Training loop
+    global_step = 0
     for epoch in range(1, num_epochs + 1):
         model.train()
-        epoch_loss = 0.0
+        epoch_total_loss = 0.0
+        epoch_recon_loss = 0.0
+        epoch_vq_loss = 0.0
+        epoch_embedding_usage = 0.0
         total_batches = 0
 
         for ply_path in tqdm(ply_paths, desc=f"Epoch {epoch} Training"):
@@ -236,23 +358,53 @@ def train_vqvae(
                 pin_memory=True
             )
 
-
-            for batch in dataloader:
+            for batch_idx, batch in enumerate(dataloader):
                 batch = batch.to(device)
                 optimizer.zero_grad()
-                x_recon, total_loss, vq_loss, _ = model(batch)
+                x_recon, total_loss, vq_loss, recon_loss, embedding_usage, _ = model(batch)
                 total_loss.backward()
                 optimizer.step()
 
-                epoch_loss += total_loss.item()
+                # Accumulate losses for epoch averaging
+                epoch_total_loss += total_loss.item()
+                epoch_recon_loss += recon_loss.item()
+                epoch_vq_loss += vq_loss.item()
+                epoch_embedding_usage += embedding_usage  # embedding_usage is already a Python float
                 total_batches += 1
+                global_step += 1
 
-        avg_loss = epoch_loss / max(total_batches, 1)
-        print(f"Epoch {epoch}/{num_epochs} - Avg Loss: {avg_loss:.6f}")
+                # Log batch-level metrics every 100 steps
+                if global_step % 100 == 0:
+                    writer.add_scalar('Loss/Total_Batch', total_loss.item(), global_step)
+                    writer.add_scalar('Loss/Reconstruction_Batch', recon_loss.item(), global_step)
+                    writer.add_scalar('Loss/VQ_Batch', vq_loss.item(), global_step)
+                    writer.add_scalar('Metrics/Embedding_Usage_Batch', embedding_usage, global_step)  # embedding_usage is already a Python float
+                    writer.add_scalar('Metrics/Learning_Rate', optimizer.param_groups[0]['lr'], global_step)
+
+        # Calculate and log epoch averages
+        avg_total_loss = epoch_total_loss / max(total_batches, 1)
+        avg_recon_loss = epoch_recon_loss / max(total_batches, 1)
+        avg_vq_loss = epoch_vq_loss / max(total_batches, 1)
+        avg_embedding_usage = epoch_embedding_usage / max(total_batches, 1)
+        
+        # Log epoch metrics
+        writer.add_scalar('Loss/Total_Epoch', avg_total_loss, epoch)
+        writer.add_scalar('Loss/Reconstruction_Epoch', avg_recon_loss, epoch)
+        writer.add_scalar('Loss/VQ_Epoch', avg_vq_loss, epoch)
+        writer.add_scalar('Metrics/Embedding_Usage_Epoch', avg_embedding_usage, epoch)
+        
+        print(f"Epoch {epoch}/{num_epochs} - Avg Total Loss: {avg_total_loss:.6f}, "
+              f"Recon Loss: {avg_recon_loss:.6f}, VQ Loss: {avg_vq_loss:.6f}, "
+              f"Embedding Usage: {avg_embedding_usage:.4f}")
 
         # Save checkpoint
         checkpoint_path = os.path.join(checkpoint_dir, f"vqvae_epoch_{epoch}.pt")
-        torch.save(model.state_dict(), checkpoint_path)
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_total_loss,
+        }, checkpoint_path)
 
     # After training, extract and save latent vectors per object
     model.eval()
@@ -264,7 +416,7 @@ def train_vqvae(
             all_latents = []
             for chunk in dataloader:
                 chunk = chunk.to(device)
-                _, _, _, z_q = model(chunk)
+                _, _, _, _, _, z_q = model(chunk)
                 # z_q shape: (batch_size=1, chunk_size, latent_dim)
                 # Remove batch dim:
                 z_q = z_q.squeeze(0)
@@ -278,7 +430,7 @@ def train_vqvae(
             save_path = os.path.join(latent_save_dir, base_name)
             np.save(save_path, latent_vector)
 
-    # Visualize some reconstruction samples from the last object
+    # Visualize some reconstruction samples from the last object and log to TensorBoard
     dataset = GaussianChunkDataset(ply_paths[-1], chunk_size, mean, std)
     dataloader = DataLoader(dataset, batch_size=5, shuffle=False)
     originals = []
@@ -286,12 +438,56 @@ def train_vqvae(
     with torch.no_grad():
         for batch in dataloader:
             batch = batch.to(device)
-            x_recon, _, _, _ = model(batch)
+            x_recon, _, _, _, _, _ = model(batch)
             originals.append(batch.cpu().numpy())
             reconstructions.append(x_recon.cpu().numpy())
-    originals = np.vstack(originals)
-    reconstructions = np.vstack(reconstructions)
-    visualize_reconstruction(originals, reconstructions, num_samples=5)
+            break  # Only take the first batch for visualization
+    
+    if originals and reconstructions:
+        originals_batch = originals[0]  # Shape: (batch_size, chunk_size, input_dim)
+        reconstructions_batch = reconstructions[0]
+        
+        # Log reconstruction samples to TensorBoard
+        for i in range(min(3, originals_batch.shape[0])):  # Log first 3 samples
+            # Create matplotlib figure
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+            
+            # Plot original
+            ax1.plot(originals_batch[i].flatten())
+            ax1.set_title('Original Gaussian Features')
+            ax1.set_xlabel('Feature Index')
+            ax1.set_ylabel('Value')
+            
+            # Plot reconstruction
+            ax2.plot(reconstructions_batch[i].flatten())
+            ax2.set_title('Reconstructed Gaussian Features')
+            ax2.set_xlabel('Feature Index')
+            ax2.set_ylabel('Value')
+            
+            plt.tight_layout()
+            writer.add_figure(f'Reconstruction/Sample_{i}', fig, num_epochs)
+            plt.close(fig)
+        
+        # Visualize and save reconstruction images
+        originals_all = np.vstack(originals)
+        reconstructions_all = np.vstack(reconstructions)
+        visualize_reconstruction(originals_all, reconstructions_all, num_samples=5)
+    
+    # Close TensorBoard writer
+    writer.close()
+    print(f"\n" + "="*60)
+    print(f"🎉 Training completed! Experiment saved to: {experiment_dir}")
+    print(f"📁 Experiment contents:")
+    print(f"├── config.json          # Experiment configuration")
+    print(f"├── README.md           # Experiment documentation")
+    print(f"├── checkpoints/        # Model checkpoints ({num_epochs} files)")
+    print(f"├── latents/           # Latent vectors ({len(ply_paths)} files)")
+    print(f"└── tensorboard_logs/  # Training metrics")
+    print(f"\n📊 To view training progress:")
+    print(f"tensorboard --logdir={tb_log_dir}")
+    print(f"\n📖 View experiment details:")
+    print(f"cat {os.path.join(experiment_dir, 'README.md')}")
+    print("="*60)
 
 
 if __name__ == "__main__":
@@ -302,13 +498,12 @@ if __name__ == "__main__":
         ply_folder=ply_folder,
         chunk_size=512,
         input_dim=9,  # 3 means + 6 covariances
-        hidden_dim=256,
-        latent_dim=256,
-        num_embeddings=512,
+        hidden_dim=4096,
+        latent_dim=4096,
+        num_embeddings=2048,
         commitment_cost=0.25,
         batch_size=64,
         num_epochs=30,
         lr=1e-3,
-        checkpoint_dir='./checkpoints_new',
-        latent_save_dir='./latent_per_object_new'
+        experiment_root_dir='./experiments'
     )
