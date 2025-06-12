@@ -1,5 +1,10 @@
 # Post Generation Grasp Refinement Pipeline
 
+## Demo 
+Below is a demo of a top-ranked grasp from our VQ-VAE evaluator being executed in Isaac Gym.
+
+https://github.com/user-attachments/assets/f7bfa489-a07c-489a-aa40-9f05143de3fb
+
 ## Overview
 This pipeline implements a complete grasp refinement system that combines 3D object representation learning, grasp quality evaluation, and iterative refinement to improve robotic grasping performance. The system takes 3D Gaussian Splatting representations of objects and learns to generate, evaluate, and refine grasps using learned object encodings.
 
