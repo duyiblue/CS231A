@@ -1,7 +1,7 @@
 # Post Generation Grasp Refinement Pipeline
 
 ## Demo 
-Below is a demo of a top-ranked grasp from our VQ-VAE evaluator being executed in Isaac Gym.
+Below is a demo of a top-ranked grasp from our VQ-VAE evaluator being executed in Isaac Gym. As you can see, the grasp succeeds even on a challenging object like a toy person. This demonstrates the efficacy of our VQ-VAE 3DGS-encoded evaluator in choosing successful grasps. 
 
 https://github.com/user-attachments/assets/f7bfa489-a07c-489a-aa40-9f05143de3fb
 
