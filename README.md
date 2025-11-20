@@ -1,3 +1,9 @@
+# Hands Off, Splat On: Dexterous Grasp Evaluator with 3D Gaussian Encodings
+
+Anuva Banwasi (anuva@stanford.edu), Yi Du (duyi@stanford.edu), Ashwin Mahendran (mashwin@stanford.edu)
+
+Abstract: We present a novel pipeline for dexterous grasp evaluation leveraging 3D Gaussian Splatting (3DGS) to encode compact, information-rich object representations.  Beginning with continuous 3DGS encodings, we design a custom Vector Quantized Variational Autoencoder (VQ-VAE) to compress these 3DGS inputs into structured, discrete latent embeddings. This approach preserves the richness of 3DGS while remaining fundamentally different from conventional discrete representations such as voxels or point clouds. The learned embeddings are then fused with grasp configurations to train a robust grasp evaluator. We further investigate adding DINO-based global embeddings to enrich 3DGS representations with high-level semantic context. Evaluated on a subset of the Get a Grip dataset, our VQ-VAE model outperforms both random (no evaluator) and Basis Point Set (BPS) baselines, achieving a 95.1\% average grasp success rate in Isaac Gym, compared to 51.3\% (random) and 88.3\% (BPS). The addition of DINO embeddings yields marginal improvements in training and validation loss, indicating their potential for semantically complex scenes. Our experiments demonstrate that compact and expressive latent encodings from 3DGS (learned from VQ-VAE) are crucial for predicting grasp outcomes reliably across unseen objects. The evaluator not only generalizes across diverse object types but also facilitates efficient sampling-based refinement, improving final grasp quality and robustness. Together, our findings show that learned 3D Gaussian representations enable scalable, accurate, and data-efficient solutions for multi-fingered robotic grasp planning.
+
 # Post Generation Grasp Refinement Pipeline
 
 ## Demo 
